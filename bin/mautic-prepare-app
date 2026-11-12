@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# Finishes an app's Mautic Composer project in APP_ROOT for Wodby, the way the
+# prebuilt wodby/mautic image is set up: adds Wodby's settings file, which reads
+# the database and address from the environment, and links the directories
+# Mautic writes to the files directory, a volume shared by every replica and
+# worker. An image built on wodby/mautic-php runs it after copying the project.
+
+set -euo pipefail
+
+if [[ -n "${DEBUG:-}" ]]; then
+    set -x
+fi
+
+cd "${APP_ROOT}"
+
+if [[ ! -f bin/console || ! -d docroot ]]; then
+    echo >&2 "${APP_ROOT} is not a Mautic Composer project with Mautic installed: run composer install in it first"
+    exit 1
+fi
+
+# Mautic writes its own settings to config/local.php, which lives in the files
+# directory. Settings committed there would be hidden by the link.
+if [[ -f config/local.php && ! -L config/local.php ]]; then
+    echo >&2 "config/local.php is Mautic's own settings file and is kept in the files directory: remove it from the repository"
+    exit 1
+fi
+
+mkdir -p config
+cp /usr/local/share/mautic/parameters_local.php config/parameters_local.php
+ln -sfn "${FILES_DIR}/config/local.php" config/local.php
+
+for link in \
+    "docroot/media/files:${FILES_DIR}/media/files" \
+    "docroot/media/images:${FILES_DIR}/media/images" \
+    "docroot/translations:${FILES_DIR}/translations" \
+    "var/import:${FILES_DIR}/import" \
+    "var/logs:${FILES_DIR}/logs"; \
+do
+    path="${link%%:*}"
+    rm -rf "${path}"
+    mkdir -p "$(dirname "${path}")"
+    ln -s "${link#*:}" "${path}"
+done
+
+# A cache compiled during the build has no settings; each container compiles
+# its own on the first request.
+rm -rf var/cache/*
+
+version="$(php -r '$l = json_decode(file_get_contents("composer.lock"), true); foreach ($l["packages"] as $p) { if ($p["name"] === "mautic/core-lib") { echo $p["version"]; } }' 2>/dev/null || true)"
+echo "Mautic ${version:-from the project} is ready in ${APP_ROOT}"

@@ -1,0 +1,68 @@
+-include env_make
+
+# Accept legacy build arguments during the image revision transition.
+BASE_IMAGE_REVISION ?= $(BASE_IMAGE_STABILITY_TAG)
+IMAGE_REVISION ?= $(STABILITY_TAG)
+
+PHP_VER ?= 8.4
+BASE_IMAGE_TAG = $(PHP_VER)-apache
+TAG ?= $(PHP_VER)
+
+REPO = wodby/mautic-php
+NAME = mautic-php-$(PHP_VER)
+
+ifneq ($(BASE_IMAGE_REVISION),)
+    BASE_IMAGE_TAG := $(BASE_IMAGE_TAG)-$(BASE_IMAGE_REVISION)
+endif
+
+ifneq ($(IMAGE_REVISION),)
+    ifneq ($(TAG),latest)
+        override TAG := $(TAG)-$(IMAGE_REVISION)
+    else ifneq ($(filter r%,$(IMAGE_REVISION)),)
+        override TAG := $(IMAGE_REVISION)
+    endif
+endif
+
+.PHONY: build test push shell run start stop logs clean release buildx-push
+
+# Resolve the same pinned base image for every local and CI build target.
+include base-images.mk
+
+default: build
+
+build:
+	docker build --build-arg BASE_IMAGE="$(BASE_IMAGE)" -t $(REPO):$(TAG) ./
+
+test:
+	cd ./tests && IMAGE=$(REPO):$(TAG) NAME=$(NAME) ./run.sh
+
+# Builds the image for both architectures and pushes it.
+PLATFORMS ?= linux/amd64,linux/arm64
+
+buildx-push:
+	docker buildx build --platform $(PLATFORMS) --push -t $(REPO):$(TAG) \
+		--build-arg BASE_IMAGE="$(BASE_IMAGE)" \
+		./
+
+push:
+	docker push $(REPO):$(TAG)
+
+shell:
+	docker run --rm --name $(NAME) -i -t $(PORTS) $(VOLUMES) $(ENV) $(REPO):$(TAG) /bin/bash
+
+run:
+	docker run --rm --name $(NAME) $(PORTS) $(VOLUMES) $(ENV) $(REPO):$(TAG) $(CMD)
+
+start:
+	docker run -d --name $(NAME) $(PORTS) $(VOLUMES) $(ENV) $(REPO):$(TAG)
+
+stop:
+	docker stop $(NAME)
+
+logs:
+	docker logs $(NAME)
+
+clean:
+	-docker rm -f $(NAME)
+
+release: build push
