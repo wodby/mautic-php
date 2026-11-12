@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+# Sends the email and records the page hits Mautic queues. Each run stops after
+# an hour or 256 MB and the next one follows, so changed queue settings take
+# effect. Nothing runs until Mautic is installed; after a failed run the worker
+# tries again a minute later.
+
+set -o pipefail
+
+if [[ -n "${DEBUG}" ]]; then
+    set -x
+fi
+
+cd "${APP_ROOT}"
+
+transports="${MAUTIC_WORKER_TRANSPORTS:-email hit}"
+
+# A stop lets the message being handled finish.
+pid=""
+trap '[[ -n "${pid}" ]] && kill -TERM "${pid}" 2>/dev/null; wait; exit 0' TERM INT QUIT
+
+while true; do
+    if mautic-installed; then
+        # shellcheck disable=SC2086
+        php bin/console messenger:consume ${transports} \
+            --time-limit=3600 --memory-limit=256M --no-interaction --no-ansi &
+        pid=$!
+        wait "${pid}" && continue
+    fi
+    sleep 60 &
+    pid=$!
+    wait "${pid}"
+done

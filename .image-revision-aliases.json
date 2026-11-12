@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "image": "wodby/mautic-php",
+  "versions": [
+    {
+      "version": {
+        "repository": "wodby/php",
+        "parent_env": "PHP84"
+      },
+      "variants": [
+        {
+          "short": [
+            "{minor}",
+            "{major}"
+          ],
+          "full": "{version}"
+        }
+      ]
+    }
+  ]
+}

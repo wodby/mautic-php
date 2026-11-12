@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+# Installs Mautic into an empty database, or migrates the database of an
+# installed Mautic to the version in the image. Mautic's web installer is never
+# used, so no one else can claim a new site before its administrator.
+
+set -eo pipefail
+
+if [[ -n "${DEBUG}" ]]; then
+    set -x
+fi
+
+cd "${APP_ROOT}"
+
+mkdir -p \
+    "${FILES_DIR}/config" \
+    "${FILES_DIR}/media/files" \
+    "${FILES_DIR}/media/images" \
+    "${FILES_DIR}/translations" \
+    "${FILES_DIR}/import" \
+    "${FILES_DIR}/logs"
+
+if mautic-installed; then
+    php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
+    # Registers the plugins in the image and updates the installed ones.
+    exec php bin/console mautic:plugins:reload --no-interaction
+fi
+
+if [[ -z "${MAUTIC_ADMIN_PASSWORD}" || -z "${MAUTIC_ADMIN_EMAIL}" ]]; then
+    echo "Mautic is not installed. To install it, set MAUTIC_ADMIN_PASSWORD and MAUTIC_ADMIN_EMAIL." >&2
+    exit 1
+fi
+
+# The installer renames the tables of an earlier installation and starts over.
+# A database that has tables, for example after the settings file was lost, is
+# never installed into.
+php -r '
+    $db = new PDO(
+        sprintf("mysql:host=%s;port=%s;dbname=%s", getenv("DB_HOST"), getenv("DB_PORT") ?: "3306", getenv("DB_NAME")),
+        getenv("DB_USERNAME"),
+        getenv("DB_PASSWORD"),
+    );
+    if ($db->query("SHOW TABLES")->fetchColumn() !== false) {
+        fwrite(STDERR, "Mautic is not installed, but its database has tables. Empty the database to install Mautic, or restore its settings file, config/local.php in the files directory.\n");
+        exit(1);
+    }
+'
+
+# The installer reads the database and the administrator from the settings
+# file, so no password appears in a process list. The administrator's entries
+# are removed from the file when the installer ends, whatever its result.
+forget_admin() {
+    php -r '
+        if (!is_file("config/local.php")) {
+            exit;
+        }
+        $parameters = [];
+        include "config/local.php";
+        $parameters = array_filter($parameters, fn ($key) => !str_starts_with($key, "admin_"), ARRAY_FILTER_USE_KEY);
+        file_put_contents("config/local.php", "<?php\n\$parameters = ".var_export($parameters, true).";\n");
+    '
+}
+trap forget_admin EXIT
+
+php -r '
+    $env = static fn (string $name, string $default = ""): string => getenv($name) ?: $default;
+    $parameters = [
+        "db_driver" => "pdo_mysql",
+        "db_host" => $env("DB_HOST"),
+        "db_port" => $env("DB_PORT", "3306"),
+        "db_name" => $env("DB_NAME"),
+        "db_user" => $env("DB_USERNAME"),
+        "db_password" => $env("DB_PASSWORD"),
+        "admin_username" => $env("MAUTIC_ADMIN_USERNAME", "admin"),
+        "admin_password" => $env("MAUTIC_ADMIN_PASSWORD"),
+        "admin_email" => $env("MAUTIC_ADMIN_EMAIL"),
+        // Email goes out through the SMTP server, and email and page hits are
+        // queued in the database for mautic-worker.
+        "mailer_dsn" => $env("MSMTP_HOST") !== "" ? sprintf("smtp://%s:%s", $env("MSMTP_HOST"), $env("MSMTP_PORT", "25")) : "null://null",
+        "mailer_from_name" => $env("MAUTIC_SITE_NAME", "Mautic"),
+        "mailer_from_email" => $env("MAUTIC_ADMIN_EMAIL"),
+        "messenger_dsn_email" => "doctrine://default",
+        "messenger_dsn_hit" => "doctrine://default",
+    ];
+    file_put_contents("config/local.php", "<?php\n\$parameters = ".var_export($parameters, true).";\n");
+'
+
+site_url="${MAUTIC_SITE_URL:-${WODBY_PRIMARY_URL:-http://localhost}}"
+php bin/console mautic:install --force --no-interaction "${site_url%/}"
+# The installer doesn't register the plugins in the image.
+php bin/console mautic:plugins:reload --no-interaction

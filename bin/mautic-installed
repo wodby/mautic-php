@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# Exits 0 when Mautic is installed: its settings name a database driver and the
+# site's address, as Mautic itself checks.
+
+set -eo pipefail
+
+cd "${APP_ROOT}"
+
+exec php -r '
+    $parameters = [];
+    if (is_file("config/local.php")) {
+        include "config/local.php";
+    }
+    exit(empty($parameters["db_driver"]) || empty($parameters["site_url"]) ? 1 : 0);
+'

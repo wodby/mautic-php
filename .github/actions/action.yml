@@ -1,0 +1,22 @@
+name: Build
+description: Build, test and publish the mautic-php image
+inputs:
+  php_ver:
+    description: PHP version
+    required: true
+  tags:
+    description: image tags
+    required: true
+runs:
+  using: "composite"
+  steps:
+  - name: Build image
+    env:
+      PHP_VER: ${{ inputs.php_ver }}
+      TAGS: ${{ inputs.tags }}
+    run: |
+      set -e
+      make
+      make test
+      . $GITHUB_ACTION_PATH/release.sh
+    shell: bash

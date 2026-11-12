@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# Runs Mautic's cron jobs one after another, then again MAUTIC_CRON_INTERVAL
+# seconds after the previous start. A job that fails is reported and the next
+# one runs. Nothing runs until Mautic is installed.
+
+set -o pipefail
+
+if [[ -n "${DEBUG}" ]]; then
+    set -x
+fi
+
+cd "${APP_ROOT}"
+
+interval="${MAUTIC_CRON_INTERVAL:-300}"
+commands="${MAUTIC_CRON_COMMANDS:-mautic:segments:update mautic:campaigns:update mautic:campaigns:trigger mautic:messages:send mautic:broadcasts:send mautic:import mautic:contacts:scheduled_export mautic:webhooks:process mautic:reports:scheduler}"
+
+# A stop ends a wait at once and passes SIGTERM to a running job, which
+# Mautic's commands handle by finishing their current step.
+pid=""
+trap '[[ -n "${pid}" ]] && kill -TERM "${pid}" 2>/dev/null; wait; exit 0' TERM INT QUIT
+
+while true; do
+    start=$(date +%s)
+    if mautic-installed; then
+        for command in ${commands}; do
+            php bin/console "${command}" --no-interaction --no-ansi &
+            pid=$!
+            wait "${pid}" || echo "${command} failed" >&2
+        done
+    fi
+    sleep $((interval - ($(date +%s) - start) % interval)) &
+    pid=$!
+    wait "${pid}"
+done
