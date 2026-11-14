@@ -13,7 +13,7 @@ on:
 
 env:
   # The revision of the wodby/php Apache variant the image is built on.
-  BASE_IMAGE_REVISION: r14
+  BASE_IMAGE_REVISION: r15
 
 jobs:
   mautic-php-8-4:
